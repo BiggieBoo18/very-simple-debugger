@@ -17,7 +17,7 @@ kernel32.OpenProcessToken.argtypes = (
 kernel32.OpenProcessToken.restype  = wintypes.BOOL
 
 def open_process(pid):
-    h_process = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
+    h_process = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, int(pid))
     if not h_process:
         return False
     return h_process

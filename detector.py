@@ -1,6 +1,8 @@
 from ctypes    import *
 from ctypes    import wintypes
 from defines   import *
+from thread    import open_thread, get_thread_context, set_thread_context
+from memory    import read_process_memory, write_process_memory
 from privilege import set_debug_privilege
 
 kernel32 = windll.kernel32
@@ -43,14 +45,57 @@ def exception_name(exception_code):
         name = "EXCEPTION_STACK_OVERFLOW"
     return name
 
-def sfw_bp_handler(exception_record):
+def sw_bp_handler(exception_record):
     print("Not Implemented yet")
 
-def detector(pid):
+def sw_bp_after(h_process, tid, sw_bps, exception_address):
+    print("sw_bp_after:        ", exception_address, hex(exception_address))
+    break_info = [info for info in sw_bps.values() if int(info[0], 16)==exception_address] # address and original_byte at break point
+    if not break_info:
+        return False
+    break_info = break_info[0]
+    h_thread = open_thread(tid)
+    if not h_thread:
+        return False
+    context = get_thread_context(h_thread)
+    if not context:
+        return False
+    if not write_process_memory(h_process, cast(int(break_info[0], 16), POINTER(BYTE)), break_info[1]):
+        return False
+    print("sw_bp_after before: ", context.Rip, hex(context.Rip))
+    context.Rip    -= 0x1
+    context.EFlags |= 1<<8
+    print("sw_bp_after after:  ", context.Rip, hex(context.Rip))
+    if not set_thread_context(h_thread, context):
+        return False
+    return True
+
+def sw_bp_reset(h_process, tid, sw_bps, exception_address):
+    print("sw_bp_reset:        ", exception_address, hex(exception_address))
+    break_info = [info for info in sw_bps.values() if int(info[0], 16)==exception_address] # address and original_byte at break point
+    if not break_info:
+        return False
+    break_info = break_info[0]
+    h_thread = open_thread(tid)
+    if not h_thread:
+        return False
+    context = get_thread_context(h_thread)
+    if not context:
+        return False
+    if not write_process_memory(h_process, cast(int(break_info[0], 16), POINTER(BYTE)), "\xCC"):
+        return False
+    context.EFlags &= ~1<<8
+    if not set_thread_context(h_thread, context):
+        return False
+    print("here")
+    return True
+
+def detector(h_process, sw_bps={}):
     first_break = False # windows break
     debug_event = DEBUG_EVENT()
     print("Please to quit the detector press Ctrl-C")
     while True:
+        continue_flag    = DBG_CONTINUE
         try:
             if kernel32.WaitForDebugEvent(byref(debug_event), 1):
                 # print("  tid:", debug_event.dwThreadId)
@@ -63,14 +108,20 @@ def detector(pid):
                     # print("    ExceptionAddress: 0x{:016X}".format(exception_record.ExceptionAddress))
                     if exception_name(exception_record.ExceptionCode)=="EXCEPTION_BREAKPOINT": # software breakpoint
                         if first_break:
-                            sfw_bp_handler(exception_record)
+                            sw_bp_handler(exception_record)
+                            if not sw_bp_after(h_process, debug_event.dwThreadId, sw_bps, exception_record.ExceptionAddress):
+                                return False
+                            continue_flag = DBG_CONTINUE
                         else:
                             first_break = True # enable first windows break
+                    if exception_name(exception_record.ExceptionCode)=="EXCEPTION_SINGLE_STEP": # single step
+                        sw_bp_reset(h_process, debug_event.dwThreadId, sw_bps, exception_record.ExceptionAddress)
+                    # if exception_name(exception_record.ExceptionCode)=="EXCEPTION_ACCESS_VIOLATION": # memory access violation
+                    #     continue_flag = DBG_EXCEPTION_NOT_HANDLED
 
                 kernel32.ContinueDebugEvent(debug_event.dwProcessId,
                                             debug_event.dwThreadId,
-                                            # DBG_EXCEPTION_NOT_HANDLED)
-                                            DBG_CONTINUE)
+                                            continue_flag)
         except EOFError:
             break
         except KeyboardInterrupt:
