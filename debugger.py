@@ -50,6 +50,7 @@ class Debugger:
                 break
             self.command_executer(cmd)
         if self.attached_pid:
+            self.del_all_sw_bps()
             self.dettach_process(self.attached_pid)
         print("[*] Debugger Quit")
 
@@ -195,7 +196,6 @@ class Debugger:
         p_address = cast(int(address, 16), POINTER(BYTE))
         if address not in [v[0] for v in self.sw_bps.values()]:
             original_byte = read_process_memory(self.h_process, p_address, 1)
-            print(original_byte)
             if not original_byte:
                 self.show_winerror()
                 return False
@@ -218,6 +218,18 @@ class Debugger:
             self.show_winerror()
             return False
         return True
+
+    def del_all_sw_bps(self):
+        for break_info in self.sw_bps.values():
+            p_address     = cast(int(break_info[0], 16), POINTER(BYTE))
+            original_byte = break_info[1]
+            if original_byte[:2]!="0x":
+                original_byte = hex(ord(original_byte))
+            if not write_process_memory(self.h_process, p_address, original_byte):
+                self.show_winerror()
+                return False
+        return True
+            
 
     def show_winerror(self):
         print(WinError(GetLastError()))

@@ -49,7 +49,6 @@ def sw_bp_handler(exception_record):
     print("Not Implemented yet")
 
 def sw_bp_after(h_process, tid, sw_bps, exception_address):
-    print("sw_bp_after:        ", exception_address, hex(exception_address))
     break_info = [info for info in sw_bps.values() if int(info[0], 16)==exception_address] # address and original_byte at break point
     if not break_info:
         return False
@@ -62,32 +61,27 @@ def sw_bp_after(h_process, tid, sw_bps, exception_address):
         return False
     if not write_process_memory(h_process, cast(int(break_info[0], 16), POINTER(BYTE)), break_info[1]):
         return False
-    print("sw_bp_after before: ", context.Rip, hex(context.Rip))
     context.Rip    -= 0x1
     context.EFlags |= 1<<8
-    print("sw_bp_after after:  ", context.Rip, hex(context.Rip))
     if not set_thread_context(h_thread, context):
         return False
-    return True
-
-def sw_bp_reset(h_process, tid, sw_bps, exception_address):
-    print("sw_bp_reset:        ", exception_address, hex(exception_address))
-    break_info = [info for info in sw_bps.values() if int(info[0], 16)==exception_address] # address and original_byte at break point
-    if not break_info:
+    context = get_thread_context(h_thread)
+    if not context:
         return False
-    break_info = break_info[0]
+    return break_info[0]
+
+def sw_bp_reset(h_process, tid, sw_bp_address):
     h_thread = open_thread(tid)
     if not h_thread:
         return False
     context = get_thread_context(h_thread)
     if not context:
         return False
-    if not write_process_memory(h_process, cast(int(break_info[0], 16), POINTER(BYTE)), "\xCC"):
+    if not write_process_memory(h_process, cast(int(sw_bp_address, 16), POINTER(BYTE)), "\xCC"):
         return False
     context.EFlags &= ~1<<8
     if not set_thread_context(h_thread, context):
         return False
-    print("here")
     return True
 
 def detector(h_process, sw_bps={}):
@@ -95,7 +89,7 @@ def detector(h_process, sw_bps={}):
     debug_event = DEBUG_EVENT()
     print("Please to quit the detector press Ctrl-C")
     while True:
-        continue_flag    = DBG_CONTINUE
+        continue_flag    = DBG_EXCEPTION_NOT_HANDLED
         try:
             if kernel32.WaitForDebugEvent(byref(debug_event), 1):
                 # print("  tid:", debug_event.dwThreadId)
@@ -109,13 +103,18 @@ def detector(h_process, sw_bps={}):
                     if exception_name(exception_record.ExceptionCode)=="EXCEPTION_BREAKPOINT": # software breakpoint
                         if first_break:
                             sw_bp_handler(exception_record)
-                            if not sw_bp_after(h_process, debug_event.dwThreadId, sw_bps, exception_record.ExceptionAddress):
+                            sw_bp_address = sw_bp_after(h_process, debug_event.dwThreadId, sw_bps, exception_record.ExceptionAddress)
+                            if not sw_bp_address:
+                                print(WinError(GetLastError()))
                                 return False
                             continue_flag = DBG_CONTINUE
                         else:
-                            first_break = True # enable first windows break
+                            first_break   = True # enable first windows break
+                            continue_flag = DBG_CONTINUE
                     if exception_name(exception_record.ExceptionCode)=="EXCEPTION_SINGLE_STEP": # single step
-                        sw_bp_reset(h_process, debug_event.dwThreadId, sw_bps, exception_record.ExceptionAddress)
+                        if sw_bp_address:
+                            sw_bp_reset(h_process, debug_event.dwThreadId, sw_bp_address)
+                        continue_flag = DBG_CONTINUE
                     # if exception_name(exception_record.ExceptionCode)=="EXCEPTION_ACCESS_VIOLATION": # memory access violation
                     #     continue_flag = DBG_EXCEPTION_NOT_HANDLED
 
